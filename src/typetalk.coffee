@@ -11,15 +11,31 @@ class Typetalk extends Hubot.Adapter
       @bot.Topic(envelope.room).create string, {}, (err, data) =>
         @robot.logger.error "Typetalk send error: #{err}" if err?
 
+  reply: (envelope, strings...) ->
+    @send envelope, strings.map((str) -> "@#{envelope.user.name} #{str}")...
+
   # override
   run: ->
     options =
       clientId: process.env.HUBOT_TYPETALK_CLIENT_ID
       clientSecret: process.env.HUBOT_TYPETALK_CLIENT_SECRET
       rooms: process.env.HUBOT_TYPETALK_ROOMS
+      apiRate: process.env.HUBOT_TYPETALK_API_RATE
 
     bot = new TypetalkStreaming options, @robot
     @bot = bot
+
+    bot.on 'message', (topicId, id, account, message) =>
+      user = @robot.brain.userForId account.id,
+        name: account.name
+        avatarImageUrl: account.imageUrl,
+        room: topicId
+      if account.id != @bot.info.id
+        @receive new Hubot.TextMessage user, message, id
+
+    bot.Me (err, data) =>
+      bot.info = data.account
+      bot.name = bot.info.name
 
     @emit 'connected'
 
@@ -28,7 +44,7 @@ exports.use = (robot) ->
 
 class TypetalkStreaming extends EventEmitter
   constructor: (options, @robot) ->
-    unless options.clientId? and options.clientSecret? and options.rooms?
+    unless options.clientId? and options.clientSecret? and options.rooms? and options.apiRate?
       @robot.logger.error \
         'Not enough parameters provided. ' \
         + 'Please set client id, client secret and rooms'
@@ -37,7 +53,17 @@ class TypetalkStreaming extends EventEmitter
     @clientId = options.clientId
     @clientSecret = options.clientSecret
     @rooms = options.rooms.split ','
+    @rate = parseInt options.apiRate, 10
     @host = 'typetalk.in'
+
+    unless @rate > 0
+      @robot.logger.error 'API rate must be greater then 0'
+      process.exit 1
+
+  Me: (callback) ->
+    @get '/profile', "", callback
+    for room in @rooms
+      @Topic(room).listen()
 
   Topics: (callback) ->
     @get '/topics', "", callback
@@ -50,6 +76,28 @@ class TypetalkStreaming extends EventEmitter
       data =
         message: message
       @post "/topics/#{id}", data, callback
+
+    listen: =>
+      firstSkiped = false
+      lastPost = 0
+      setInterval =>
+        @Topic(id).get {}, (err, data) =>
+          if not firstSkiped
+            for post in data.posts
+              if lastPost < post.id
+                lastPost = post.id
+            firstSkiped = true
+            return
+
+          for post in data.posts
+            if lastPost < post.id
+              lastPost = post.id
+              @emit 'message',
+                 data.topic.id,
+                 post.id,
+                 post.account,
+                 post.message
+      , 1000 / (@rate / (60 * 60))
 
   get: (path, body, callback) ->
     @request "GET", path, body, callback
