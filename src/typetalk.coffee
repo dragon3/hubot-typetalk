@@ -94,6 +94,7 @@ class TypetalkStreaming extends EventEmitter
 
     listen: =>
       lastPostId = 0
+      firstSkiped = false
       setInterval =>
         opts =
           if lastPostId is 0
@@ -104,6 +105,13 @@ class TypetalkStreaming extends EventEmitter
             count: 100
 
         @Topic(id).get opts, (err, data) =>
+          if not firstSkiped
+            for post in data.posts
+              if lastPostId < post.id
+                lastPostId = post.id
+            firstSkiped = true
+            return
+
           for post in data.posts
             continue unless lastPostId < post.id
 
